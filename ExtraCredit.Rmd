@@ -1,0 +1,120 @@
+---
+title: "ExtraCredit"
+author: "SangniHuang"
+date: "4/24/2020"
+output: html_document
+---
+```{r packages,echo=FALSE}
+library(ranger)
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+```
+
+## Introduction
+
+In this project, I used data from IBM HR Analytics Employee Attrition & Performance, which includes a total of 35 variables such as "Age","Attrition","Education","EnvironmentalSatisfaction","JobInvolvement","JobSatisfaction","PerformanceRating",etc. I chose Attribution to be the response variable and the goal of this project was to predict Attribution by selecting a set of explanatory variables and building a random forest classification tree.
+
+## Data Cleaning
+```{r,echo=FALSE}
+library(readr)
+Attrition <- read.csv("~/ExtraCredit/WA_Fn-UseC_-HR-Employee-Attrition.csv")
+AttData <- Attrition[,c(1,2,5,7,12,14,15,19,25,32)]
+AttData <- na.omit(AttData) 
+summary(AttData)
+```
+
+I selected a set of potential explanatory variables including Age, Department, Education, Gender, JobInvolvement, JobLevel, MonthlyIncome, PerformanceRating and YearsAtCompany. The total number of variables was 9. Then I performed a variable importance test by fitting a random forest classification tree with mtry set to 3. 
+
+## Variable Importance Check
+```{r variable_importance}
+rf_spec <- rand_forest(
+  mode = "classification",
+  mtry = 3
+)%>%
+  set_engine(
+    "ranger",
+    importance = "impurity")
+
+model <- fit(rf_spec,
+             Attrition ~ .,
+             data = AttData)
+
+var_imp <- ranger::importance(model$fit)
+
+var_imp_df <- data.frame(
+  variable = names(var_imp),
+  importance = var_imp
+)
+
+var_imp_df %>%
+  mutate(variable = factor(variable,
+                           levels = variable[order(var_imp_df$importance)]))%>%   
+  ggplot(aes(x = variable, y = importance))+
+  geom_col()+
+  coord_flip()
+```
+
+Based on the plot of variable importance from fitting a random forest classification tree, I would select MonthlyIncome, Age, YearsAtCompany, JobInvolvement and Education as the explanatory variables. The first four variables' importances are higher than 20 and Education's importance is close to 20.
+
+## Random Forest Classification Tree
+```{r rand_forest}
+set.seed(10)
+att_cv <- vfold_cv(AttData, v= 10)
+random_spec <- rand_forest(
+  mode = "classification",
+  mtry = 2,
+  trees = tune()
+) %>%
+  set_engine("ranger")
+
+grid <- expand_grid(trees = c(10, 25, 50, 100, 150, 200, 300, 400))
+
+model_rf <- tune_grid(random_spec,
+             Attrition ~ MonthlyIncome + Age + YearsAtCompany + JobInvolvement + Education,
+             grid = grid,
+             resamples = att_cv,
+             metrics = metric_set(gain_capture, accuracy))
+
+best <- model_rf %>%
+  select_best(metric = "gain_capture") %>%
+  pull()
+```
+
+I chose to fit a random forest classification tree, because compared to decision tree and bagged tree, random forest can help decorrelate the trees and avoid inflating the variance by allowing looking at 2 predictors at a time at each split. I changed the mtry to 2 because the new number of predictors was 5. The parameter I wanted to tune was the number of trees, examining 10, 25, 50, 100, 150, 200, 300 and 400 trees, so I splitted the data into a cross validation set with 10 folds. The best number of trees I obtained was 100, which minimized the Gini index.  
+
+```{r final}
+final_spec <- rand_forest(
+  mode = "classification",
+  mtry = 2,
+  trees = best
+) %>%
+  set_engine("ranger")
+
+final_model <- fit(final_spec,
+  Attrition ~ MonthlyIncome + Age + YearsAtCompany + JobInvolvement + Education,
+  data = AttData
+)
+```
+
+Then I fitted the final model on the original data with my selections of variables (MonthlyIncome, Age, YearsAtCompany, JobInvolvement and Education) and with the final specification of random forest classification tree with the best number of trees (100). 
+
+## Evaluation & Conclusion
+
+```{r evaluation}
+final_model %>%
+  predict(new_data = AttData) %>%
+  bind_cols(AttData) %>%
+  conf_mat(truth = Attrition, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+I examined how the final model does on the full sample. From the confusion matrix built on the final model, I obtained the misclassifation rate which is 9.51%. This suggests that the final random forest classification tree with the 5 selected varaibles did a nice job on predicting the Attrition in the original data.  
+
+## Citation 
+
+@misc{pavansubhash_2017, 
+title={IBM HR Analytics Employee Attrition & Performance}, url={https://www.kaggle.com/pavansubhasht/ibm-hr-analytics-attrition-dataset/kernels}, journal={Kaggle}, 
+author={Pavansubhash}, 
+year={2017}, 
+month={Mar}}
